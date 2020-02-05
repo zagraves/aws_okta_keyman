@@ -16,6 +16,30 @@ else:
 
 class ConfigTest(unittest.TestCase):
 
+    def test_full_app_url(self):
+        config = Config(['aws_okta_keyman.py'])
+        config.org = 'example'
+        config.appid = 'some/thing'
+
+        ret = config.full_app_url()
+        self.assertEqual(ret, 'https://example.okta.com/some/thing')
+
+    def test_full_app_url_preview(self):
+        config = Config(['aws_okta_keyman.py'])
+        config.org = 'example'
+        config.appid = 'some/thing'
+        config.oktapreview = True
+
+        ret = config.full_app_url()
+        self.assertEqual(ret, 'https://example.oktapreview.com/some/thing')
+
+    @mock.patch('aws_okta_keyman.config.sys.exit')
+    @mock.patch('aws_okta_keyman.config.Config.interactive_config')
+    def test_start_interactive_config(self, int_mock, exit_mock):
+        Config(['aws_okta_keyman.py', 'config'])
+        assert int_mock.called
+        assert exit_mock.called
+
     @mock.patch('aws_okta_keyman.config.Config.parse_config')
     @mock.patch('aws_okta_keyman.config.os.path.isfile')
     def test_set_appid_from_account_id(self, isfile_mock, parse_mock):
@@ -24,40 +48,70 @@ class ConfigTest(unittest.TestCase):
         config = Config(['aws_okta_keyman.py'])
         config.accounts = [{'appid': 'A123'}]
         config.set_appid_from_account_id(0)
-        self.assertEquals(config.appid, 'A123')
+        self.assertEqual(config.appid, 'A123')
 
     def test_validate_good_with_accounts(self):
         config = Config(['aws_okta_keyman.py'])
         config.accounts = [{'appid': 'A123'}]
         config.org = 'example'
         config.username = 'user@example.com'
-        self.assertEquals(config.validate(), None)
+        self.assertEqual(config.validate(), None)
 
     def test_validate_good_with_appid(self):
         config = Config(['aws_okta_keyman.py'])
         config.appid = 'A123'
         config.org = 'example'
         config.username = 'user@example.com'
-        self.assertEquals(config.validate(), None)
-
-    def test_validate_missing_username(self):
-        config = Config(['aws_okta_keyman.py'])
-        config.accounts = [{'appid': 'A123'}]
-        config.org = 'example'
-        with self.assertRaises(ValueError):
-            config.validate()
+        self.assertEqual(config.validate(), None)
 
     def test_validate_missing_org(self):
         config = Config(['aws_okta_keyman.py'])
-        config.accounts = [{'appid': 'A123'}]
         config.username = 'user@example.com'
         with self.assertRaises(ValueError):
             config.validate()
 
-    def test_validate_missing_appid_and_accounts(self):
+    @mock.patch('aws_okta_keyman.config.getpass')
+    def test_validate_automatic_username_from_none(self, getpass_mock):
+        getpass_mock.getuser.return_value = 'user'
         config = Config(['aws_okta_keyman.py'])
-        config.username = 'user@example.com'
         config.org = 'example'
+        config.validate()
+        self.assertEqual(config.username, 'user')
+
+    @mock.patch('aws_okta_keyman.config.getpass')
+    def test_validate_automatic_username_from_partial_config(self,
+                                                             getpass_mock):
+        getpass_mock.getuser.return_value = 'user'
+        config = Config(['aws_okta_keyman.py'])
+        config.accounts = [{'appid': 'A123'}]
+        config.org = 'example'
+        config.username = 'automatic-username'
+        config.validate()
+        self.assertEqual(config.username, 'user')
+
+    @mock.patch('aws_okta_keyman.config.getpass')
+    def test_validate_automatic_username_from_full_config(self, getpass_mock):
+        getpass_mock.getuser.return_value = 'user'
+        config = Config(['aws_okta_keyman.py'])
+        config.accounts = [{'appid': 'A123'}]
+        config.org = 'example'
+        config.username = 'automatic-username@example.com'
+        config.validate()
+        self.assertEqual(config.username, 'user@example.com')
+
+    def test_validate_short_duration(self):
+        config = Config(['aws_okta_keyman.py'])
+        config.org = 'example'
+        config.duration = 1
+
+        with self.assertRaises(ValueError):
+            config.validate()
+
+    def test_validate_long_duration(self):
+        config = Config(['aws_okta_keyman.py'])
+        config.org = 'example'
+        config.duration = 100000000
+
         with self.assertRaises(ValueError):
             config.validate()
 
@@ -104,14 +158,14 @@ class ConfigTest(unittest.TestCase):
             mock.call('/.config/aws_okta_keyman.yml'),
         ])
 
+    @mock.patch('aws_okta_keyman.config.Config.parse_args')
     @mock.patch('aws_okta_keyman.config.os.path.expanduser')
     @mock.patch('aws_okta_keyman.config.Config.parse_config')
     @mock.patch('aws_okta_keyman.config.Config.validate')
-    @mock.patch('aws_okta_keyman.config.Config.parse_args')
     @mock.patch('aws_okta_keyman.config.os.path.isfile')
-    def test_get_config_specified_config_only(self, isfile_mock, parse_mock,
-                                              valid_mock, config_mock,
-                                              expuser_mock):
+    def test_get_config_specified_config_only(self, isfile_mock, valid_mock,
+                                              config_mock, expuser_mock,
+                                              _parse_mock):
         isfile_mock.return_value = True
         valid_mock.return_value = None
         config_mock.return_value = None
@@ -130,7 +184,7 @@ class ConfigTest(unittest.TestCase):
     @mock.patch('aws_okta_keyman.config.Config.validate')
     @mock.patch('aws_okta_keyman.config.Config.parse_args')
     @mock.patch('aws_okta_keyman.config.os.path.isfile')
-    def test_get_config_write_mixed_config(self, isfile_mock, parse_mock,
+    def test_get_config_write_mixed_config(self, isfile_mock, _parse_mock,
                                            valid_mock, expuser_mock,
                                            write_mock):
         isfile_mock.return_value = True
@@ -142,7 +196,7 @@ class ConfigTest(unittest.TestCase):
         config.get_config()
         config.write = './.config/aws_okta_keyman.yml'
 
-        self.assertEquals(config.write, './.config/aws_okta_keyman.yml')
+        self.assertEqual(config.write, './.config/aws_okta_keyman.yml')
         write_mock.assert_has_calls([
             mock.call(),
         ])
@@ -156,8 +210,9 @@ class ConfigTest(unittest.TestCase):
         config.parse_args(main_required=False)
 
         # Should succeed without throwing due to missing args
-        self.assertEquals(config.debug, True)
+        self.assertEqual(config.debug, True)
 
+    @mock.patch('argparse.ArgumentParser._print_message', mock.MagicMock())
     def test_parse_args_req_main_missing(self):
         argv = [
             'aws_okta_keyman.py',
@@ -180,9 +235,9 @@ class ConfigTest(unittest.TestCase):
         config.parse_args(main_required=True)
 
         # Should succeed without throwing due to missing args
-        self.assertEquals(config.appid, 'app/id')
-        self.assertEquals(config.org, 'foobar')
-        self.assertEquals(config.username, 'test')
+        self.assertEqual(config.appid, 'app/id')
+        self.assertEqual(config.org, 'foobar')
+        self.assertEqual(config.username, 'test')
 
     def test_parse_args_verify_all_parsed_short(self):
         argv = [
@@ -193,22 +248,22 @@ class ConfigTest(unittest.TestCase):
             '-n', 'profilename',
             '-c', 'config_file_path',
             '-w', 'write_file_path',
-            '-R', 'us-west-2',
+            '-d', 'push',
             '-D', '-r', '-p'
         ]
         config = Config(argv)
         config.parse_args(main_required=True)
 
-        self.assertEquals(config.appid, 'app/id')
-        self.assertEquals(config.org, 'foobar')
-        self.assertEquals(config.username, 'test')
-        self.assertEquals(config.name, 'profilename')
-        self.assertEquals(config.config, 'config_file_path')
-        self.assertEquals(config.writepath, 'write_file_path')
-        self.assertEquals(config.region, 'us-west-2')
-        self.assertEquals(config.debug, True)
-        self.assertEquals(config.reup, True)
-        self.assertEquals(config.oktapreview, True)
+        self.assertEqual(config.appid, 'app/id')
+        self.assertEqual(config.org, 'foobar')
+        self.assertEqual(config.username, 'test')
+        self.assertEqual(config.name, 'profilename')
+        self.assertEqual(config.config, 'config_file_path')
+        self.assertEqual(config.writepath, 'write_file_path')
+        self.assertEqual(config.duo_factor, 'push')
+        self.assertEqual(config.debug, True)
+        self.assertEqual(config.reup, True)
+        self.assertEqual(config.oktapreview, True)
 
     def test_parse_args_verify_all_parsed_full(self):
         argv = [
@@ -219,21 +274,21 @@ class ConfigTest(unittest.TestCase):
             '--name', 'profilename',
             '--config', 'config_file_path',
             '--writepath', 'write_file_path',
-            '--region', 'us-west-2',
+            '--duo_factor', 'push',
             '--debug', '--reup'
         ]
         config = Config(argv)
         config.parse_args(main_required=True)
 
-        self.assertEquals(config.appid, 'app/id')
-        self.assertEquals(config.org, 'foobar')
-        self.assertEquals(config.username, 'test')
-        self.assertEquals(config.name, 'profilename')
-        self.assertEquals(config.config, 'config_file_path')
-        self.assertEquals(config.writepath, 'write_file_path')
-        self.assertEquals(config.region, 'us-west-2')
-        self.assertEquals(config.debug, True)
-        self.assertEquals(config.reup, True)
+        self.assertEqual(config.appid, 'app/id')
+        self.assertEqual(config.org, 'foobar')
+        self.assertEqual(config.username, 'test')
+        self.assertEqual(config.name, 'profilename')
+        self.assertEqual(config.config, 'config_file_path')
+        self.assertEqual(config.writepath, 'write_file_path')
+        self.assertEqual(config.duo_factor, 'push')
+        self.assertEqual(config.debug, True)
+        self.assertEqual(config.reup, True)
 
     @mock.patch('aws_okta_keyman.config.os.path.isfile')
     def test_read_yaml(self, isfile_mock):
@@ -244,7 +299,7 @@ class ConfigTest(unittest.TestCase):
 
         m = mock.mock_open(read_data=yml)
         with mock.patch('aws_okta_keyman.config.open', m):
-                ret = Config.read_yaml('./.config/aws_okta_keyman.yml')
+            ret = Config.read_yaml('./.config/aws_okta_keyman.yml')
 
         expected = {
             'username': 'user@example.com', 'org': 'example', 'appid': 'app/id'
@@ -327,9 +382,9 @@ class ConfigTest(unittest.TestCase):
 
         config.parse_config('./.config/aws_okta_keyman.yml')
 
-        self.assertEquals(config.appid, 'app/id')
-        self.assertEquals(config.org, 'example')
-        self.assertEquals(config.username, 'user@example.com')
+        self.assertEqual(config.appid, 'app/id')
+        self.assertEqual(config.org, 'example')
+        self.assertEqual(config.username, 'user@example.com')
 
     def test_parse_config_args_preferred(self):
         config = Config(['aws_okta_keyman.py'])
@@ -346,9 +401,9 @@ class ConfigTest(unittest.TestCase):
         config.parse_config('./.config/aws_okta_keyman.yml')
 
         # Make sure we're getting the args not the config values
-        self.assertEquals(config.appid, 'mysupercoolapp/id')
-        self.assertEquals(config.org, 'foobar')
-        self.assertEquals(config.username, 'test')
+        self.assertEqual(config.appid, 'mysupercoolapp/id')
+        self.assertEqual(config.org, 'foobar')
+        self.assertEqual(config.username, 'test')
 
     def test_write_config(self):
         config = Config(['aws_okta_keyman.py'])
@@ -371,7 +426,7 @@ class ConfigTest(unittest.TestCase):
 
         m = mock.mock_open()
         with mock.patch('aws_okta_keyman.config.open', m):
-                config.write_config()
+            config.write_config()
 
         m.assert_has_calls([
             mock.call(u'./.config/aws_okta_keyman.yml', 'w'),
@@ -431,7 +486,7 @@ class ConfigTest(unittest.TestCase):
 
         m = mock.mock_open()
         with mock.patch('aws_okta_keyman.config.open', m):
-                config.write_config()
+            config.write_config()
 
         m.assert_has_calls([
             mock.call().write('org'),
@@ -469,9 +524,28 @@ class ConfigTest(unittest.TestCase):
 
         m = mock.mock_open()
         with mock.patch('aws_okta_keyman.config.open', m):
-                config.write_config()
+            config.write_config()
 
         m.assert_has_calls([mock.call(expected_path, 'w')])
+
+    @mock.patch('aws_okta_keyman.config.os')
+    def test_write_config_path_create_when_missing(self, os_mock):
+        config = Config(['aws_okta_keyman.py'])
+        config.clean_config_for_write = mock.MagicMock()
+        config.clean_config_for_write.return_value = {}
+        config.read_yaml = mock.MagicMock()
+        config.read_yaml.return_value = {}
+        folderpath = '/home/user/.config/'
+        os_mock.path.dirname.return_value = folderpath
+        os_mock.path.exists.return_value = False
+
+        m = mock.mock_open()
+        with mock.patch('aws_okta_keyman.config.open', m):
+            config.write_config()
+
+        os_mock.assert_has_calls([
+            mock.call.makedirs(folderpath)
+        ])
 
     def test_clean_config_for_write(self):
         config_in = {
@@ -483,7 +557,9 @@ class ConfigTest(unittest.TestCase):
             'debug': 'foo',
             'oktapreview': 'foo',
             'accounts': None,
-            'shouldstillbehere': 'woohoo'
+            'shouldstillbehere': 'woohoo',
+            'password_reset': True,
+            'command': None
         }
         config_out = {
             'shouldstillbehere': 'woohoo'
@@ -505,7 +581,9 @@ class ConfigTest(unittest.TestCase):
             'debug': 'foo',
             'oktapreview': 'foo',
             'accounts': accounts,
-            'shouldstillbehere': 'woohoo'
+            'shouldstillbehere': 'woohoo',
+            'password_reset': True,
+            'command': None
         }
         config_out = {
             'accounts': accounts,
@@ -513,3 +591,58 @@ class ConfigTest(unittest.TestCase):
         }
         ret = Config.clean_config_for_write(config_in)
         self.assertEqual(ret, config_out)
+
+    @mock.patch('aws_okta_keyman.config.input')
+    def test_user_input(self, input_mock):
+        input_mock.return_value = ' test '
+        self.assertEqual('test', Config.user_input('input test'))
+
+    @mock.patch('aws_okta_keyman.config.getpass')
+    @mock.patch('aws_okta_keyman.config.input')
+    def test_interactive_config(self, input_mock, getpass_mock):
+        input_mock.side_effect = ['org', 'user', 'appid', 'test', '']
+        getpass_mock.return_value = 'fakeuser'
+        config = Config(['aws_okta_keyman.py'])
+        config.write_config = mock.MagicMock()
+
+        config.interactive_config()
+
+        self.assertEqual(config.org, 'org')
+        self.assertEqual(config.username, 'user')
+        self.assertEqual(config.accounts, [{'name': 'test', 'appid': 'appid'}])
+        config.write_config.assert_has_calls([mock.call()])
+
+    @mock.patch('aws_okta_keyman.config.getpass')
+    @mock.patch('aws_okta_keyman.config.input')
+    def test_interactive_config_auto_user(self, input_mock, getpass_mock):
+        input_mock.side_effect = ['org', '', 'appid', 'test', '']
+        getpass_mock.return_value = 'fakeuser'
+        config = Config(['aws_okta_keyman.py'])
+        config.write_config = mock.MagicMock()
+
+        config.interactive_config()
+
+        self.assertEqual(config.username, 'automatic-username')
+
+    @mock.patch('aws_okta_keyman.config.getpass')
+    @mock.patch('aws_okta_keyman.config.input')
+    def test_interactive_config_auto_account(self, input_mock, _getpass_mock):
+        input_mock.side_effect = ['org', 'user', '']
+        config = Config(['aws_okta_keyman.py'])
+        config.write_config = mock.MagicMock()
+
+        config.interactive_config()
+
+        self.assertEqual(config.accounts, None)
+
+    @mock.patch('aws_okta_keyman.config.getpass')
+    @mock.patch('aws_okta_keyman.config.input')
+    def test_interactive_config_keyboardexit(self, input_mock, getpass_mock):
+        input_mock.side_effect = ['org', 'user', KeyboardInterrupt]
+        getpass_mock.return_value = 'fakeuser'
+        config = Config(['aws_okta_keyman.py'])
+        config.write_config = mock.MagicMock()
+
+        ret = config.interactive_config()
+        self.assertEqual(ret, None)
+        assert not config.write_config.called

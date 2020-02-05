@@ -20,6 +20,8 @@ import argparse
 import getpass
 import logging
 import os
+import sys
+import textwrap
 
 import yaml
 
@@ -34,16 +36,39 @@ class Config:
     def __init__(self, argv):
         self.argv = argv
         self.config = None
-        self.writepath = None
+        self.writepath = '~/.config/aws_okta_keyman.yml'
         self.org = None
         self.accounts = None
         self.username = None
         self.reup = None
         self.debug = None
         self.appid = None
+        self.duo_factor = None
         self.name = 'default'
         self.oktapreview = None
+        self.password_cache = None
+        self.password_reset = None
+        self.command = None
+        self.screen = None
         self.region = None
+        self.duration = None
+        self.console = None
+
+        if len(argv) > 1:
+            if argv[1] == 'config':
+                self.interactive_config()
+                sys.exit(0)
+
+    def full_app_url(self):
+        """ Retrieve the full Okta app URL. """
+        okta_domain = 'okta.com'
+        if self.oktapreview:
+            okta_domain = 'oktapreview.com'
+        full_url = "https://{}.{}/{}".format(
+            self.org,
+            okta_domain,
+            self.appid)
+        return full_url
 
     def set_appid_from_account_id(self, account_id):
         """Take an account ID (list index) and sets the appid based on that."""
@@ -51,36 +76,46 @@ class Config:
 
     def validate(self):
         """Ensure we have all the settings we need before continuing."""
-        if self.appid is None:
-            if not self.accounts:
-                raise ValueError('The appid parameter is required if accounts '
-                                 'have not been set in the config file.')
-        required = ['org', 'username']
-        for arg in required:
-            if getattr(self, arg) is None:
-                err = ("The parameter {} must be provided in the config file "
-                       "or as an argument".format(arg))
+        if getattr(self, 'org') is None:
+            err = ("The parameter org must be provided in the config file "
+                   "or as an argument")
+            raise ValueError(err)
+        duration = getattr(self, 'duration')
+        if duration:
+            if duration > 43200 or duration < 900:
+                err = ("The parameter duration must be between 900 and 43200 "
+                       "(15m to 12h).")
                 raise ValueError(err)
 
-        self.username = self.username.replace('automatic-username',
-                                              getpass.getuser())
+        if self.region is None:
+            self.region = 'us-east-1'
+
+        if self.username is None:
+            user = getpass.getuser()
+            LOG.info(
+                "No username provided; defaulting to current user '{}'".format(
+                    user))
+            self.username = user
+        elif 'automatic-username' in self.username:
+            self.username = self.username.replace('automatic-username',
+                                                  getpass.getuser())
 
     def get_config(self):
         """Get the config and set everything up based on the args and/or local
         config file.
         """
-        file = os.path.expanduser('~') + '/.config/aws_okta_keyman.yml'
+        config_file = os.path.expanduser('~') + '/.config/aws_okta_keyman.yml'
         if '-w' in self.argv[1:] or '--writepath' in self.argv[1:]:
             self.parse_args(main_required=False)
             self.write_config()
         elif '-c' in self.argv[1:] or '--config' in self.argv[1:]:
             self.parse_args(main_required=False)
             self.parse_config(self.config)
-        elif os.path.isfile(file):
+        elif os.path.isfile(config_file):
             # If we haven't been told to write out the args and no filename is
             # given just use the default path
             self.parse_args(main_required=False)
-            self.parse_config(file)
+            self.parse_config(config_file)
         else:
             # No default file, none specified; operate on args only
             self.parse_args()
@@ -104,7 +139,10 @@ class Config:
             'AWS Okta Keyman can use a config file to pre-configure most of\n'
             'the settings needed for execution. The default location is \n'
             '\'~/.config/aws_okta_keyman.yml\' on Linux/Mac or for Windows \n'
-            'it is \'$USERPROFILE\\.config\\aws_okta_keyman.yml\'\n')
+            'it is \'$USERPROFILE\\.config\\aws_okta_keyman.yml\'\n\n'
+            'To set up a basic config you can start aws_okta_keyman with '
+            'the sole argument \nof config and it will prompt you for the'
+            'basic config settings needed to get started\n')
         return epilog
 
     def parse_args(self, main_required=True):
@@ -149,33 +187,32 @@ class Config:
                                    'enter in foobar here'
                                ),
                                required=required)
-        arg_group.add_argument('-u', '--username', type=str,
-                               help=(
-                                   'Okta Login Name - either '
-                                   'bob@foobar.com, or just bob works too,'
-                                   ' depending on your organization '
-                                   'settings.'
-                               ),
-                               required=required)
-        arg_group.add_argument('-a', '--appid', type=str,
-                               help=(
-                                   'The "redirect link" Application ID  - '
-                                   'this can be found by mousing over the '
-                                   'application in Okta\'s Web UI. See '
-                                   'details below for more help.'
-                               ),
-                               required=required)
 
     @staticmethod
     def optional_args(optional_args):
         """Define the always-optional arguments."""
+        optional_args.add_argument('-u', '--username', type=str,
+                                   help=(
+                                     'Okta Login Name - either '
+                                     'bob@foobar.com, or just bob works too,'
+                                     ' depending on your organization '
+                                     'settings. Will use the current user if '
+                                     'not specified.'
+                                   ))
+        optional_args.add_argument('-a', '--appid', type=str, help=(
+                                   'The "redirect link" Application ID  - '
+                                   'this can be found by mousing over the '
+                                   'application in Okta\'s Web UI. See '
+                                   'details below for more help.'
+                                   ))
         optional_args.add_argument('-V', '--version', action='version',
                                    version=__version__)
         optional_args.add_argument('-D', '--debug', action='store_true',
                                    help=(
                                        'Enable DEBUG logging - note, this is '
                                        'extremely verbose and exposes '
-                                       'credentials so be careful here!'
+                                       'credentials on the screen so be '
+                                       'careful here!'
                                    ),
                                    default=False)
         optional_args.add_argument('-r', '--reup', action='store_true',
@@ -183,6 +220,14 @@ class Config:
                                        'Automatically re-up the AWS creds '
                                        'before they expire.'
                                    ), default=0)
+        optional_args.add_argument('-d', '--duo_factor', type=str,
+                                   help=(
+                                       'Duo Auth preferred MFA factor. '
+                                       'This prevents getting prompted each '
+                                       'time Keyman is run.'
+                                   ),
+                                   default=None,
+                                   choices=['web', 'push', 'call', 'passcode'])
         optional_args.add_argument('-n', '--name', type=str,
                                    help='AWS Profile Name', default='default')
         optional_args.add_argument('-c', '--config', type=str,
@@ -197,12 +242,51 @@ class Config:
                                        'production Okta organization.'
                                    ),
                                    default=False)
-        optional_args.add_argument('-R', '--region', type=str,
-                                   help=(
-                                       'Specify a region for the stored '
-                                       'AWS credentials'
+        optional_args.add_argument('-P', '--password_cache',
+                                   action='store_true', help=(
+                                       'Use OS keyring to cache your password.'
                                    ),
-                                   default='us-east-1')
+                                   default=False)
+        optional_args.add_argument('-R', '--password_reset',
+                                   action='store_true', help=(
+                                       'Reset your password in the cache. '
+                                       'Use this to update the cached password'
+                                       ' if it has changed or is incorrect.'
+                                   ),
+                                   default=False)
+        optional_args.add_argument('-C', '--command', type=str,
+                                   help=(
+                                        'Command to run with the requested '
+                                        'AWS keys provided as environment '
+                                        'variables.'
+                                    ))
+        optional_args.add_argument('-s', '--screen', action='store_true',
+                                   help=(
+                                       'Print the retrieved key '
+                                       'only and do not write to the AWS '
+                                       'credentials file.'
+                                   ),
+                                   default=False)
+        optional_args.add_argument('-re', '--region', type=str,
+                                   help=(
+                                       'AWS region to use for calls. '
+                                       'Required for GovCloud.'
+                                   ))
+        optional_args.add_argument('-du', '--duration', type=int,
+                                   help=(
+                                       'AWS API Key duration to request. '
+                                       'If the supplied value is rejected '
+                                       'by AWS the default of 3600s (one '
+                                       'hour) will be used.'
+                                   ),
+                                   default=3600)
+        optional_args.add_argument('-co', '--console',
+                                   action='store_true', help=(
+                                       'Output AWS Console URLs to log in '
+                                       'and use the web conle with the '
+                                       'selected role..'
+                                   ),
+                                   default=False)
 
     @staticmethod
     def read_yaml(filename, raise_on_error=False):
@@ -210,7 +294,7 @@ class Config:
         config = {}
         try:
             if os.path.isfile(filename):
-                config = yaml.load(open(filename, 'r'))
+                config = yaml.load(open(filename, 'r'), Loader=yaml.FullLoader)
                 LOG.debug("YAML loaded config: {}".format(config))
             else:
                 if raise_on_error:
@@ -249,6 +333,12 @@ class Config:
 
         LOG.debug("YAML being saved: {}".format(config_out))
 
+        file_folder = os.path.dirname(os.path.abspath(file_path))
+        if not os.path.exists(file_folder):
+            LOG.debug("Creating missin config file folder : {}".format(
+                file_folder))
+            os.makedirs(file_folder)
+
         with open(file_path, 'w') as outfile:
             yaml.safe_dump(config_out, outfile, default_flow_style=False)
 
@@ -256,7 +346,7 @@ class Config:
     def clean_config_for_write(config):
         """Remove args we don't want to save to a config file."""
         ignore = ['name', 'appid', 'argv', 'writepath', 'config', 'debug',
-                  'oktapreview']
+                  'oktapreview', 'password_reset', 'command']
         for var in ignore:
             del config[var]
 
@@ -264,3 +354,62 @@ class Config:
             del config['accounts']
 
         return config
+
+    @staticmethod
+    def user_input(text):
+        """Wrap input() making testing support of py2 and py3 easier."""
+        return input(text).strip()
+
+    def interactive_config(self):
+        """ Runs an interactive configuration to make it simpler to create
+        the config file. Always uses default path.
+        """
+        LOG.info('Interactive setup requested')
+
+        try:
+            print("\nWhat is your Okta Organization subdomain?")
+            print("Example; for https://co.okta.com enter 'co'\n")
+            while not self.org:
+                self.org = self.user_input('Okta org: ')
+
+            print("\nWhat is your Okta user name?")
+            print("If it is {} you can leave this blank.\n".format(
+                getpass.getuser()))
+            self.username = self.user_input('Username: ')
+            if self.username == '':
+                self.username = 'automatic-username'
+
+            msg = (
+                'Next we can optionally configure your AWS integrations. '
+                'This is not required as the AWS integrations can be picked '
+                'up automatically from Okta. If you would prefer to list only '
+                'specific integrations or prefer to specify the friendly '
+                'names yourself you can provide the following information. '
+                'You will be prompted to continue providing integration '
+                'details until you provide a blank response to the app ID. '
+                'If you are unsure how to answer these questions just leave '
+                'the app ID blank.')
+            print('')
+            for line in textwrap.wrap(msg):
+                print(line)
+
+            accounts = []
+            appid = None
+            while not appid == '':
+                print("\nWhat is your AWS integration app ID?")
+                print("Example; 0oaciCSo1d8/123")
+                appid = self.user_input('App ID: ')
+                if appid:
+                    print("\nPlease provide a friendly name for this app.")
+                    name = self.user_input('App ID: ')
+                    accounts.append({'name': name, 'appid': appid})
+
+            if accounts:
+                self.accounts = accounts
+
+            self.write_config()
+            print('')
+            LOG.info('Config file written. Please rerun Keyman')
+        except KeyboardInterrupt:
+            print('')
+            LOG.warning('User cancelled configuration; exiting')
